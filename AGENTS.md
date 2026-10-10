@@ -4,17 +4,18 @@ Instructions for any coding agent (Claude Code, Codex, pi, or others) working in
 
 ## What this repo is
 
-The single source of the user's shared agent tooling: skills now, with Claude Code mods and plugins to come. Installed copies are symlinks back into this repo, so a change here reaches every agent on the machine.
+The single source of the user's shared agent tooling: skills for every agent, and Claude Code mods. Installed skills are symlinks back into this repo, and mods install from it as a plugin marketplace, so a change here reaches every agent on the machine.
 
 ## Layout
 
 ```
-skills/<name>/SKILL.md   one skill per folder (Agent Skills format)
-install.sh               links each skill into ~/.agents/skills and ~/.claude/skills
-README.md                install and usage docs for humans
+skills/<name>/SKILL.md          one skill per folder (Agent Skills format)
+install.sh                      links each skill into ~/.agents/skills and ~/.claude/skills
+mods/<name>/                    Claude Code mods (plugins with a hooks module)
+.claude-plugin/marketplace.json lists the mods, so Claude Code installs them from this repo
+README.md                       install and usage docs for humans
+docs/                           images the README shows
 ```
-
-Planned, not yet created: `standards/` (shared review rubric and findings schema) and `mods/` (Claude Code mods, starting with a PR review board).
 
 ## Rules
 
@@ -24,6 +25,13 @@ Planned, not yet created: `standards/` (shared review rubric and findings schema
 - Never commit `NOTES.md`. It is a local session-handover file and is excluded through `.git/info/exclude`.
 - Don't push, open pull requests, or create anything on GitHub without asking the user first.
 - Write Markdown prose one line per paragraph or list item. Don't hard-wrap.
+
+## Mod conventions
+
+- A new mod gets an entry in `.claude-plugin/marketplace.json` and a section in `README.md` with its install line.
+- Before committing a mod change, run `claude plugin validate mods/<name>` and `claude plugin test mods/<name>`, and type-check it with `tsc -p mods/<name>`. The type files `tsconfig.json` points at are written into the mod folder only when Claude Code loads it from there, with `claude --plugin-dir mods/<name>`; an installed copy writes them into its cache instead.
+- Never commit `mods/*/.claude-plugin/types/`: Claude Code writes it on load, and `.gitignore` excludes it.
+- An installed mod runs from a cached copy, so `/reload-plugins` does not pick up edits to `mods/`. Bump `version` in the mod's `plugin.json` when its behaviour changes, then `claude plugin marketplace update agent-toolkit` and `claude plugin update <name>@agent-toolkit` and a restart apply it. Test edits in a `claude --plugin-dir mods/<name>` session.
 
 ## Skill conventions
 

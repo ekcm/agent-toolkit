@@ -1,0 +1,14 @@
+{
+  "name": "agent-toolkit",
+  "owner": {
+    "name": "Elijah Khor"
+  },
+  "description": "Shared skills and Claude Code mods for coding agents.",
+  "plugins": [
+    {
+      "name": "pr-review-board",
+      "source": "./mods/pr-review-board",
+      "description": "Review several PRs at once with Claude and Codex side by side: live progress, verification, a debate on disagreements, and a combined result."
+    }
+  ]
+}

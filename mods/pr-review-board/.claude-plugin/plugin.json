@@ -1,0 +1,9 @@
+{
+  "name": "pr-review-board",
+  "version": "0.1.1",
+  "description": "Review several PRs at once with Claude and Codex side by side, in a live panel that shows each reviewer's progress and where they agree and disagree.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Elijah Khor"
+  }
+}
