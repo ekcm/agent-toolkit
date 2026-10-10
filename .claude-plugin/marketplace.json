@@ -13,7 +13,7 @@
     {
       "name": "dev-statusline",
       "source": "./mods/dev-statusline",
-      "description": "A two-line status line: repo, branch and the branch's PR checks and resolved review threads, then Claude's context and 5-hour window beside Codex's."
+      "description": "A two-line status line: repo, worktree, branch and the branch's PR checks and resolved review threads, then Claude's context and 5-hour window beside Codex's; plus a row per subagent showing its worktree's PR."
     }
   ]
 }

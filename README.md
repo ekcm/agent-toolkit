@@ -140,7 +140,7 @@ Then point Claude Code's status line at it, in `~/.claude/settings.json` (this r
 }
 ```
 
-It needs macOS or Linux (it runs `sh`, `sed` and `find`), `gh` logged in for the PR part, and the `codex` CLI logged in for the Codex figure; a part whose tool is missing is left out or shows `—`.
+It needs macOS or Linux (it runs `sh`, `sed` and `find`), `gh` logged in for the PR part, the `codex` CLI logged in for the Codex figure, and `jq` for the subagent rows (macOS includes it); a part whose tool is missing is left out or shows `—`.
 
 The mod keeps the figures and writes the two lines to `~/.agent-toolkit/dev-statusline/<session id>.txt`; that script, which the mod writes on start-up, prints the file for the session asking. Each session's file is removed when it ends, and leftovers older than a day are cleared on start-up. The lines show under the prompt, below Claude Code's own line with the permission mode, and update whenever Claude Code redraws its status line.
 
@@ -150,6 +150,19 @@ What each part shows:
 - **ctx:** a gauge of the context window used, `▰` for used and `▱` for free, then the share used and tokens used out of the window (`32% 64k/200k`), straight from Claude Code.
 - **claude 5h:** how much of Claude's 5-hour usage window is left, and the time until it resets, straight from Claude Code. It shows `—` off a subscription.
 - **codex 5h:** how much of Codex's 5-hour window is left, and the time until it resets, live from your Codex account: the mod starts `codex app-server` for about a second, asks it for the account's rate limits (no tokens spent) and stops it. It needs the `codex` CLI on your `PATH`, logged in. If that fails, it falls back to the newest session log in `~/.codex/sessions` (or `$CODEX_HOME/sessions`), which is only as fresh as your last interactive Codex turn. It shows `—` when there is no reading.
+
+Worktrees: inside a linked git worktree the first line still leads with the project, the main repository's folder name, followed by the worktree's folder, dim: `Muse/DEV-67 (feat/DEV-67-wiki-link-resolver)`. A detached checkout shows `(detached <commit>)`, and its PR is the open one containing that commit, so pr-review-board's review checkouts show their PR too.
+
+Subagents: when Claude Code runs subagents, for example one per worktree, the mod also draws their rows in the agent panel under the prompt, as a tree:
+
+```
+├─ DEV-67   running · ✓ checks · 0/5 resolved · 48k tokens
+└─ DEV-70   done    · ✗ 1 failing · no threads · 112k tokens
+```
+
+Each row names the worktree the subagent works in (or the subagent, outside any worktree), its status, that worktree's PR and its tokens. The mod ships this as the plugin's `subagentStatusLine` setting, so it needs no settings entry; it runs `~/.agent-toolkit/dev-statusline/subagents.sh`, which the mod writes on start-up. The PR states come from one `gh` call listing the repository's open PRs, made only when the repository has more than one worktree.
+
+Several sessions share one Codex reading: the first to need it asks Codex and saves it to `~/.agent-toolkit/dev-statusline/codex.json`, and the others reuse it for a minute.
 
 Colours: checks and review threads are green, yellow or red, in your terminal's own colours. The repo name is bold in a darker Claude orange. The gauge's used segments, its percentage and `claude 5h` with its share left are Claude orange, and `codex 5h` with its share left is Codex lilac; a share left under 10% is also bold and underlined. `left`, the reset times, the free segments and the token count stay plain, and the separators, the branch's brackets and empty states (`no PR`, `no checks`, `no threads`, `—`) are dim. The brand colours need a terminal with 24-bit colour. The colours are set in one table, `COLORS` in `hooks/format.ts`.
 

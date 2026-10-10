@@ -12,8 +12,13 @@ export type Pr = { number: number; checks: Checks; threads: Threads | null }
 export type Window = { percentUsed: number; resetsAt: number | null }
 
 export type StatusData = {
+  // The project: the main repository's folder name, also inside a worktree.
   repo: string | null
+  // The linked worktree's folder name; null in the main checkout.
+  worktree?: string | null
+  // The branch, or the short commit when the checkout is detached.
   branch: string | null
+  isDetached?: boolean
   // undefined: not looked up yet (or gh unavailable); null: no PR for the branch.
   pr: Pr | null | undefined
   context: { tokens?: number; percent?: number; window: number } | null
@@ -120,7 +125,7 @@ function threadsText(threads: Threads | null): string | null {
   return paint(color, `${threads.resolved}/${threads.total} resolved`)
 }
 
-function prText(pr: Pr | null | undefined): string | null {
+export function prText(pr: Pr | null | undefined): string | null {
   if (pr === undefined) return null
   if (pr === null) return paint('dim', 'no PR')
   // No PR number: Claude Code's own line under the prompt already shows it.
@@ -163,9 +168,65 @@ function windowText(agent: 'claude' | 'codex', window: Window | null, now: numbe
 }
 
 export function formatStatus(data: StatusData, now: number): string {
-  const branch = data.branch ? ` ${paint('dim', '(')}${data.branch}${paint('dim', ')')}` : ''
-  const where = data.repo ? `${paint('repo', data.repo)}${branch}` : null
+  const head = data.isDetached ? `detached ${data.branch}` : data.branch
+  const branch = head ? ` ${paint('dim', '(')}${head}${paint('dim', ')')}` : ''
+  const worktree = data.worktree ? paint('dim', `/${data.worktree}`) : ''
+  const where = data.repo ? `${paint('repo', data.repo)}${worktree}${branch}` : null
   const first = [where, data.repo ? prText(data.pr) : null].filter(Boolean).join(SEPARATOR)
   const second = [contextText(data.context), windowText('claude', data.claude, now), windowText('codex', data.codex, now)].join(SEPARATOR)
   return first ? `${first}\n${second}` : second
+}
+
+export type Worktree = { path: string; head: string | null; branch: string | null }
+
+// Reads `git worktree list --porcelain`: a `worktree <path>` line opens each
+// entry, `HEAD <sha>` gives its commit, and `branch refs/heads/<name>` names
+// its branch unless detached.
+export function parseWorktrees(porcelain: string): Worktree[] {
+  const worktrees: Worktree[] = []
+  for (const line of porcelain.split('\n')) {
+    if (line.startsWith('worktree ')) worktrees.push({ path: line.slice('worktree '.length), head: null, branch: null })
+    else if (line.startsWith('HEAD ') && worktrees.length) worktrees[worktrees.length - 1]!.head = line.slice('HEAD '.length)
+    else if (line.startsWith('branch refs/heads/') && worktrees.length) worktrees[worktrees.length - 1]!.branch = line.slice('branch refs/heads/'.length)
+  }
+  return worktrees
+}
+
+type OpenPrNode = {
+  number?: number
+  headRefName?: string
+  headRefOid?: string
+  reviewThreads?: { totalCount?: number; nodes?: { isResolved?: boolean }[] }
+  commits?: { nodes?: { commit?: { statusCheckRollup?: { contexts?: { nodes?: unknown[] } } | null } }[] }
+}
+
+// Reads the GraphQL answer listing a repository's open PRs, each with its
+// checks and review threads, keyed by branch and by head commit (for detached
+// checkouts, which have no branch to go by).
+export function parseOpenPrs(answer: unknown): { byBranch: Map<string, Pr>; byCommit: Map<string, Pr> } {
+  const byBranch = new Map<string, Pr>()
+  const byCommit = new Map<string, Pr>()
+  const nodes = (answer as { data?: { repository?: { pullRequests?: { nodes?: OpenPrNode[] } } } })?.data?.repository?.pullRequests?.nodes
+  for (const node of Array.isArray(nodes) ? nodes : []) {
+    if (typeof node.number !== 'number' || !node.headRefName) continue
+    const threads = node.reviewThreads
+    const pr: Pr = {
+      number: node.number,
+      checks: parseChecks(node.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes ?? []),
+      threads: threads && typeof threads.totalCount === 'number' && Array.isArray(threads.nodes)
+        ? { resolved: threads.nodes.filter(n => n.isResolved).length, total: threads.totalCount }
+        : null,
+    }
+    byBranch.set(node.headRefName, pr)
+    if (node.headRefOid) byCommit.set(node.headRefOid, pr)
+  }
+  return { byBranch, byCommit }
+}
+
+// The name a worktree's row goes by: its folder, or for a folder named just
+// `worktree` (as pr-review-board's are, under pr-<n>/) the folder above it.
+export function worktreeName(path: string): string {
+  const parts = path.split('/').filter(Boolean)
+  const last = parts[parts.length - 1] ?? path
+  return last === 'worktree' && parts.length > 1 ? parts[parts.length - 2]! : last
 }

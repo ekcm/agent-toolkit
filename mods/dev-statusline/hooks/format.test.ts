@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { COLORS, formatStatus, paint, plain, parseChecks, parseCodexLine, parseCodexLive, parseThreads, tokensText, type StatusData } from './format'
+import { COLORS, formatStatus, paint, parseOpenPrs, parseWorktrees, plain, worktreeName, parseChecks, parseCodexLine, parseCodexLive, parseThreads, tokensText, type StatusData } from './format'
 
 // The status line as plain text, colour codes removed.
 const show = (data: StatusData, now: number) => plain(formatStatus(data, now))
@@ -148,5 +148,40 @@ describe('colours', () => {
     const missing = formatStatus({ ...base, context: null, claude: null }, NOW)
     expect(missing).toContain(`ctx ${paint('dim', '—')}`)
     expect(missing).toContain(`${paint('claude', 'claude 5h')} ${paint('dim', '—')}`)
+  })
+})
+
+describe('worktrees', () => {
+  test('parseWorktrees reads each path, its commit and its branch, null when detached', () => {
+    const porcelain = 'worktree /r\nHEAD 1\nbranch refs/heads/main\n\nworktree /w/DEV-67\nHEAD 2\nbranch refs/heads/feat/DEV-67\n\nworktree /x/pr-19/worktree\nHEAD 3\ndetached\n'
+    expect(parseWorktrees(porcelain)).toEqual([
+      { path: '/r', head: '1', branch: 'main' },
+      { path: '/w/DEV-67', head: '2', branch: 'feat/DEV-67' },
+      { path: '/x/pr-19/worktree', head: '3', branch: null },
+    ])
+  })
+
+  test('worktreeName uses the folder, or the one above a folder named worktree', () => {
+    expect(worktreeName('/w/DEV-67')).toBe('DEV-67')
+    expect(worktreeName('/home/me/.agent-toolkit/pr-reviews/Muse/pr-19/worktree')).toBe('pr-19')
+  })
+
+  test('parseOpenPrs keys each open PR by its branch and its head commit, with checks and threads', () => {
+    const answer = { data: { repository: { pullRequests: { nodes: [{
+      number: 19, headRefName: 'feat/DEV-67', headRefOid: 'b8e72fe',
+      reviewThreads: { totalCount: 5, nodes: [{ isResolved: true }, { isResolved: false }, { isResolved: false }, { isResolved: false }, { isResolved: false }] },
+      commits: { nodes: [{ commit: { statusCheckRollup: { contexts: { nodes: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }, { state: 'PENDING' }] } } } }] },
+    }, { number: 20, headRefName: 'feat/none', commits: { nodes: [{ commit: { statusCheckRollup: null } }] } }] } } } }
+    const { byBranch, byCommit } = parseOpenPrs(answer)
+    expect(byBranch.get('feat/DEV-67')).toEqual({ number: 19, checks: { passing: 1, failing: 0, running: 1 }, threads: { resolved: 1, total: 5 } })
+    expect(byCommit.get('b8e72fe')).toBe(byBranch.get('feat/DEV-67'))
+    expect(byBranch.get('feat/none')).toEqual({ number: 20, checks: { passing: 0, failing: 0, running: 0 }, threads: null })
+    expect(byCommit.size).toBe(1)
+  })
+
+  test('the first line leads with the project, the worktree dim after it', () => {
+    const text = formatStatus({ ...base, repo: 'Muse', worktree: 'DEV-67', branch: 'feat/DEV-67' }, NOW)
+    expect(text.split('\n')[0]).toBe(`${paint('repo', 'Muse')}${paint('dim', '/DEV-67')} ${paint('dim', '(')}feat/DEV-67${paint('dim', ')')}`)
+    expect(show({ ...base, repo: 'Muse', worktree: 'pr-19', branch: 'b8e72fe', isDetached: true }, NOW).split('\n')[0]).toBe('Muse/pr-19 (detached b8e72fe)')
   })
 })

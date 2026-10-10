@@ -4,16 +4,32 @@
 import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 import { plain } from './format'
-import { READER_SCRIPT } from './reader'
+import { READER_SCRIPT, SUBAGENT_SCRIPT } from './reader'
 
 const START = { cwd: '/repo', surface: 'terminal', isInteractive: true } as const
 
 const DIR = '/home/me/.agent-toolkit/dev-statusline'
 
-type Fake = { prState: 'open' | 'none' | 'offline'; isCodexLive: boolean; files: Map<string, string>; ran: string[] }
+// `checkout` is where the session runs: the main checkout, a linked worktree
+// (/home/me/DEV-67, on feat/widgets), or a detached review checkout.
+type Fake = {
+  prState: 'open' | 'none' | 'offline'
+  checkout: 'main' | 'worktree' | 'detached'
+  isCodexLive: boolean
+  files: Map<string, string>
+  ran: string[]
+}
+
+const PR_12 = { number: 12, statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] }
+const OPEN_PRS = { data: { repository: { pullRequests: { nodes: [
+  { number: 12, headRefName: 'feat/widgets', headRefOid: '222', reviewThreads: { totalCount: 2, nodes: [{ isResolved: true }, { isResolved: false }] },
+    commits: { nodes: [{ commit: { statusCheckRollup: { contexts: { nodes: [{ __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'SUCCESS' }] } } } }] } },
+  { number: 13, headRefName: 'feat/search', headRefOid: '333', reviewThreads: { totalCount: 0, nodes: [] },
+    commits: { nodes: [{ commit: { statusCheckRollup: { contexts: { nodes: [{ __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'FAILURE' }] } } } }] } },
+] } } } }
 
 function fakeHost(on: On, prState: Fake['prState'] = 'open'): Fake {
-  const fake: Fake = { prState, isCodexLive: true, files: new Map(), ran: [] }
+  const fake: Fake = { prState, checkout: 'main', isCodexLive: true, files: new Map(), ran: [] }
   const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
   const fail = (stderr: string) => ({ value: { exitCode: 1, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } })
 
@@ -35,17 +51,38 @@ function fakeHost(on: On, prState: Fake['prState'] = 'open'): Fake {
     fake.files.set(e.path, e.text)
     return { value: undefined }
   })
+  on('fs.read', ($, e) => {
+    const text = fake.files.get(e.path)
+    if (text === undefined) throw new Error(`no such file: ${e.path}`)
+    return { value: text }
+  })
   on('process.run', ($, e) => {
     const cmd = e.argv.join(' ')
     fake.ran.push(cmd)
     if (e.argv[0] === 'find' || e.argv[0] === 'rm') return ok()
-    if (cmd.includes('rev-parse --show-toplevel')) return ok('/home/me/repo')
-    if (cmd.includes('symbolic-ref')) return ok('feat/widgets')
+    if (cmd.includes('rev-parse --path-format=absolute')) {
+      if (fake.checkout === 'main') return ok('/home/me/repo\n/home/me/repo/.git\n/home/me/repo/.git')
+      if (fake.checkout === 'worktree') return ok('/home/me/DEV-67\n/home/me/repo/.git/worktrees/DEV-67\n/home/me/repo/.git')
+      return ok('/home/me/.agent-toolkit/pr-reviews/repo/pr-12/worktree\n/home/me/repo/.git/worktrees/worktree\n/home/me/repo/.git')
+    }
+    if (cmd.includes('symbolic-ref')) return fake.checkout === 'detached' ? fail('fatal: ref HEAD is not a symbolic ref') : ok('feat/widgets')
+    if (cmd.includes('rev-parse --short HEAD')) return ok('abc1234')
+    if (cmd.includes('rev-parse HEAD')) return ok('abc1234def5678')
+    if (cmd.includes('worktree list --porcelain')) {
+      const main = 'worktree /home/me/repo\nHEAD 111\nbranch refs/heads/main\n'
+      if (fake.checkout === 'main') return ok(main)
+      return ok(`${main}\nworktree /home/me/DEV-67\nHEAD 222\nbranch refs/heads/feat/widgets\n\nworktree /home/me/DEV-70\nHEAD 333\nbranch refs/heads/feat/search\n\nworktree /home/me/.agent-toolkit/pr-reviews/repo/pr-12/worktree\nHEAD 222\ndetached\n\nworktree /home/me/.agent-toolkit/pr-reviews/repo/pr-9/worktree\nHEAD 999\ndetached\n`)
+    }
+    if (cmd.startsWith('gh pr list')) {
+      expect(e.argv).toContain('abc1234def5678')
+      return ok(JSON.stringify(fake.prState === 'open' ? [PR_12] : []))
+    }
     if (cmd.startsWith('gh pr view')) {
       if (fake.prState === 'none') return fail('no pull requests found for branch "feat/widgets"')
       if (fake.prState === 'offline') return fail('error connecting to api.github.com')
-      return ok(JSON.stringify({ number: 12, statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] }))
+      return ok(JSON.stringify(PR_12))
     }
+    if (cmd.startsWith('gh api graphql') && !cmd.includes('pr=')) return ok(JSON.stringify(OPEN_PRS))
     if (cmd.startsWith('gh api graphql')) {
       return ok(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { totalCount: 2, nodes: [{ isResolved: true }, { isResolved: false }] } } } } }))
     }
@@ -78,6 +115,10 @@ test('the line shows the branch PR, its checks and threads, and both agents', as
     'ctx ▱▱▱▱▱▱▱▱▱▱ 0% 0/200k · claude 5h 90% left (1h00m) · codex 5h 70% left (2h00m)',
   ])
   expect(fake.files.get(`${DIR}/statusline.sh`)).toBe(READER_SCRIPT)
+  expect(fake.files.get(`${DIR}/subagents.sh`)).toBe(SUBAGENT_SCRIPT)
+  // A repository with one checkout has no other worktrees to describe.
+  expect(fake.files.get(`${DIR}/session-1.worktrees.json`)).toBe('{}')
+  expect(fake.ran.some(cmd => cmd.startsWith('gh api graphql') && !cmd.includes('pr='))).toBe(false)
 })
 
 test('a branch without a PR says so, and gh failing drops the PR part', async ($, on) => {
@@ -103,7 +144,7 @@ test('the session ending removes its lines', async ($, on) => {
   await $.session.start(START)
   await written(fake, text => text.includes('codex 5h 70% left'))
   await $.session.end({ reason: 'prompt_input_exit', sessionId: 'session-1' } as never)
-  expect(fake.ran).toContain(`rm -f ${DIR}/session-1.txt`)
+  expect(fake.ran).toContain(`rm -f ${DIR}/session-1.txt ${DIR}/session-1.worktrees.json`)
 })
 
 test('without a live Codex answer, the newest session log is used', async ($, on) => {
@@ -111,4 +152,45 @@ test('without a live Codex answer, the newest session log is used', async ($, on
   fake.isCodexLive = false
   await $.session.start(START)
   expect((await written(fake, text => text.includes('codex 5h 88% left')))[1]).toBe('ctx ▱▱▱▱▱▱▱▱▱▱ 0% 0/200k · claude 5h 90% left (1h00m) · codex 5h 88% left (2h00m)')
+})
+
+test('in a worktree the project leads, the worktree follows dim, and every worktree gets a row, a detached one found by its commit', async ($, on) => {
+  const fake = fakeHost(on)
+  fake.checkout = 'worktree'
+  await $.session.start(START)
+  expect((await written(fake, text => text.includes('1/2 resolved')))[0]).toBe('repo/DEV-67 (feat/widgets) · ✓ checks · 1/2 resolved')
+  for (let i = 0; i < 5000 && !fake.files.get(`${DIR}/session-1.worktrees.json`)?.includes('DEV-70'); i += 1) await Promise.resolve()
+  const rows = JSON.parse(fake.files.get(`${DIR}/session-1.worktrees.json`)!) as Record<string, { name: string; pr: string }>
+  expect(Object.fromEntries(Object.entries(rows).map(([path, row]) => [path, { name: row.name, pr: plain(row.pr) }]))).toEqual({
+    '/home/me/repo': { name: 'repo', pr: 'no PR' },
+    '/home/me/DEV-67': { name: 'DEV-67', pr: '✓ checks · 1/2 resolved' },
+    '/home/me/DEV-70': { name: 'DEV-70', pr: '✗ 1 failing · no threads' },
+    '/home/me/.agent-toolkit/pr-reviews/repo/pr-12/worktree': { name: 'pr-12', pr: '✓ checks · 1/2 resolved' },
+    '/home/me/.agent-toolkit/pr-reviews/repo/pr-9/worktree': { name: 'pr-9', pr: '' },
+  })
+})
+
+test('a detached checkout shows its commit and finds its PR by that commit', async ($, on) => {
+  const fake = fakeHost(on)
+  fake.checkout = 'detached'
+  await $.session.start(START)
+  expect((await written(fake, text => text.includes('1/2 resolved')))[0]).toBe('repo/pr-12 (detached abc1234) · ✓ checks · 1/2 resolved')
+})
+
+test('a fresh Codex reading from another session is reused instead of asking Codex', async ($, on) => {
+  const fake = fakeHost(on)
+  const now = Date.parse('2026-10-11T10:00:00Z')
+  fake.files.set(`${DIR}/codex.json`, JSON.stringify({ at: now - 10_000, codex: { percentUsed: 50, resetsAt: now + 3_600_000 } }))
+  await $.session.start(START)
+  expect((await written(fake, text => text.includes('codex 5h 50% left')))[1]).toContain('codex 5h 50% left (1h00m)')
+  expect(fake.ran.some(cmd => cmd.includes('app-server'))).toBe(false)
+})
+
+test('a stale shared Codex reading is replaced by a live one, which is shared in turn', async ($, on) => {
+  const fake = fakeHost(on)
+  const now = Date.parse('2026-10-11T10:00:00Z')
+  fake.files.set(`${DIR}/codex.json`, JSON.stringify({ at: now - 120_000, codex: { percentUsed: 50, resetsAt: null } }))
+  await $.session.start(START)
+  await written(fake, text => text.includes('codex 5h 70% left'))
+  expect(JSON.parse(fake.files.get(`${DIR}/codex.json`)!)).toEqual({ at: now, codex: { percentUsed: 30, resetsAt: Date.parse('2026-10-11T12:00:00Z') } })
 })

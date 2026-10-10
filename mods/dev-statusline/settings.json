@@ -1,0 +1,6 @@
+{
+  "subagentStatusLine": {
+    "type": "command",
+    "command": "sh ~/.agent-toolkit/dev-statusline/subagents.sh"
+  }
+}
