@@ -66,6 +66,8 @@ Invoke a skill by name — `/name` in Claude Code, `$name` in Codex.
 
 [Mods](https://www.claudemod.com/) change Claude Code itself (panels, commands, hooks), so unlike the skills they work in Claude Code only. Each lives in `mods/<name>/`, and this repo is a plugin marketplace that lists them.
 
+To install from your local clone instead of GitHub, add it as a marketplace once with `claude plugin marketplace add ~/Documents/GitHub/agent-toolkit`, then install each mod as `<name>@agent-toolkit`. An install runs from a cached copy of the mod, so editing the clone changes nothing until you bump `version` in the mod's `plugin.json`, run `claude plugin marketplace update agent-toolkit` and `claude plugin update <name>@agent-toolkit`, and restart Claude Code. While working on a mod, start Claude Code with `claude --plugin-dir ~/Documents/GitHub/agent-toolkit/mods/<name>` instead: it loads the clone directly, and `/reload-plugins` picks up edits.
+
 ### pr-review-board
 
 Reviews several PRs at once with Claude and Codex side by side, in a live panel. For each PR it runs both reviewers independently, combines their findings, runs the PR's install, tests and build, then has the two agents debate whatever they disagree on, and shows what both agree on, what was confirmed, withdrawn or still disputed, colour-coded by severity and tagged by source.
@@ -84,8 +86,6 @@ Or install from your local clone:
 claude plugin marketplace add ~/Documents/GitHub/agent-toolkit
 /plugin install pr-review-board@agent-toolkit
 ```
-
-An install runs from a cached copy of the mod, so editing the clone changes nothing until you bump `version` in its `plugin.json`, run `claude plugin marketplace update agent-toolkit` and `claude plugin update pr-review-board@agent-toolkit`, and restart Claude Code. While working on the mod, start Claude Code with `claude --plugin-dir ~/Documents/GitHub/agent-toolkit/mods/pr-review-board` instead: it loads the clone directly, and `/reload-plugins` picks up edits.
 
 It needs `gh` logged in, the `claude` and `codex` CLIs on your `PATH`, and the `review-pull-request` skill installed with `./install.sh`.
 
@@ -115,4 +115,41 @@ What it touches:
 git -C <repo> worktree remove --force ~/.agent-toolkit/pr-reviews/<repo>/pr-<n>/worktree
 git -C <repo> update-ref -d refs/pr-review/<n>
 ```
+
+### dev-statusline
+
+A two-line status line for working across Claude Code and Codex: the repo, branch and the branch's PR on top, and how much room each agent has left below.
+
+```
+agent-toolkit (feat/statusline) · ✓ checks · 4/7 resolved
+ctx ▰▰▰▱▱▱▱▱▱▱ 32% 64k/200k · claude 5h 58% left (2h10m) · codex 5h 55% left (1h05m)
+```
+
+Install it in Claude Code:
+
+```
+/plugin install dev-statusline --marketplace ekcm/agent-toolkit
+```
+
+Then point Claude Code's status line at it, in `~/.claude/settings.json` (this replaces any `statusLine` you already have):
+
+```json
+"statusLine": {
+  "type": "command",
+  "command": "sh ~/.agent-toolkit/dev-statusline/statusline.sh"
+}
+```
+
+It needs macOS or Linux (it runs `sh`, `sed` and `find`), `gh` logged in for the PR part, and the `codex` CLI logged in for the Codex figure; a part whose tool is missing is left out or shows `—`.
+
+The mod keeps the figures and writes the two lines to `~/.agent-toolkit/dev-statusline/<session id>.txt`; that script, which the mod writes on start-up, prints the file for the session asking. Each session's file is removed when it ends, and leftovers older than a day are cleared on start-up. The lines show under the prompt, below Claude Code's own line with the permission mode, and update whenever Claude Code redraws its status line.
+
+What each part shows:
+
+- **PR:** the open PR for the current branch, from `gh` (its number is left out, since Claude Code's own line under the prompt shows it): `✓ checks`, `◷ 3 running` or `✗ 2 failing`, then resolved review threads out of all of them. It shows `no PR` when the branch has none, and drops the PR part when `gh` is missing, logged out or offline. It refreshes at the end of each turn and every minute.
+- **ctx:** a gauge of the context window used, `▰` for used and `▱` for free, then the share used and tokens used out of the window (`32% 64k/200k`), straight from Claude Code.
+- **claude 5h:** how much of Claude's 5-hour usage window is left, and the time until it resets, straight from Claude Code. It shows `—` off a subscription.
+- **codex 5h:** how much of Codex's 5-hour window is left, and the time until it resets, live from your Codex account: the mod starts `codex app-server` for about a second, asks it for the account's rate limits (no tokens spent) and stops it. It needs the `codex` CLI on your `PATH`, logged in. If that fails, it falls back to the newest session log in `~/.codex/sessions` (or `$CODEX_HOME/sessions`), which is only as fresh as your last interactive Codex turn. It shows `—` when there is no reading.
+
+Colours: checks and review threads are green, yellow or red, in your terminal's own colours. The repo name is bold in a darker Claude orange. The gauge's used segments, its percentage and `claude 5h` with its share left are Claude orange, and `codex 5h` with its share left is Codex lilac; a share left under 10% is also bold and underlined. `left`, the reset times, the free segments and the token count stay plain, and the separators, the branch's brackets and empty states (`no PR`, `no checks`, `no threads`, `—`) are dim. The brand colours need a terminal with 24-bit colour. The colours are set in one table, `COLORS` in `hooks/format.ts`.
 

@@ -9,6 +9,11 @@
       "name": "pr-review-board",
       "source": "./mods/pr-review-board",
       "description": "Review several PRs at once with Claude and Codex side by side: live progress, verification, a debate on disagreements, and a combined result."
+    },
+    {
+      "name": "dev-statusline",
+      "source": "./mods/dev-statusline",
+      "description": "A two-line status line: repo, branch and the branch's PR checks and resolved review threads, then Claude's context and 5-hour window beside Codex's."
     }
   ]
 }

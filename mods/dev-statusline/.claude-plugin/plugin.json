@@ -1,0 +1,8 @@
+{
+  "name": "dev-statusline",
+  "version": "0.3.5",
+  "description": "A two-line status line: repo, branch and the branch's PR (checks, resolved review threads), then Claude's context and 5-hour window beside Codex's 5-hour window.",
+  "author": {
+    "name": "Elijah Khor"
+  }
+}
