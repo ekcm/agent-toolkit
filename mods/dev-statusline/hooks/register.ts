@@ -1,8 +1,8 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { READER_SCRIPT, SUBAGENT_SCRIPT } from './reader'
 import {
-  formatStatus, parseChecks, parseCodexLine, parseCodexLive, parseOpenPrs, parseThreads, parseWorktrees, prText, worktreeName,
-  type StatusData, type Window,
+  activityText, agentsText, formatStatus, parseChecks, parseCodexLine, parseCodexLive, parseOpenPrs, parseThreads, parseWorktrees, prText, worktreeName,
+  type AgentActivity, type StatusData, type Window,
 } from './format'
 
 type $ = EngineInterface
@@ -46,9 +46,25 @@ for f in $(ls -t "$1"/sessions/*/*/*/rollout-*.jsonl 2>/dev/null | head -5); do
   if [ -n "$line" ]; then printf '%s\\n' "$line"; exit 0; fi
 done`
 
+// Agent activity changes with every tool call, so it is written at most this
+// often; the agents line is redrawn this often while any agent is about, so
+// an idle one shows as idle without waiting for a turn to end.
+const AGENTS_WRITE_MS = 500
+const AGENTS_TICK_MS = 15_000
+
+// An agent that ended this long ago is dropped from the file.
+const AGENTS_KEEP_MS = 10 * 60_000
+
 const data: StatusData = { repo: null, worktree: null, branch: null, isDetached: false, pr: undefined, context: null, claude: null, codex: null }
 let ticker: { cancel: () => void } | null = null
+let agentsTicker: { cancel: () => void } | null = null
 let isRefreshing = false
+
+// Every subagent's activity by agent id, and its tool calls in flight (an
+// agent can run several at once).
+let agents: Record<string, AgentActivity> = {}
+const toolsInFlight = new Map<string, number>()
+let isAgentsWritePending = false
 
 async function run($: $, argv: string[], cwd?: string): Promise<string | null> {
   try {
@@ -189,6 +205,51 @@ async function refresh($: $) {
   await show($)
 }
 
+function agentsFile(dir: string, sessionId: string): string {
+  return `${dir}/${sessionId}.agents.json`
+}
+
+// Writes every subagent's activity for the row script, with each one's
+// parent from the engine's own list, and sums them up for the agents line.
+async function writeAgents($: $) {
+  isAgentsWritePending = false
+  const now = await $.clock.now()
+  const list = await $.agent.list().catch(() => null)
+  if (list) {
+    for (const info of list) {
+      const seen = agents[info.id] ?? (agents[info.id] = { phase: null, since: now })
+      if (info.parentId) seen.parent = info.parentId
+    }
+    const listed = new Set(list.map(info => info.id))
+    agents = Object.fromEntries(Object.entries(agents).filter(([id, seen]) => listed.has(id) || !seen.endedAt || now - seen.endedAt < AGENTS_KEEP_MS))
+  }
+  data.agents = list ? agentsText(list, agents, now) : null
+  await $.fs.write(agentsFile(await linesDir($), await $.session.id()), JSON.stringify(agents))
+  await show($)
+}
+
+function scheduleAgentsWrite($: $) {
+  if (isAgentsWritePending) return
+  isAgentsWritePending = true
+  try {
+    $.clock.after(AGENTS_WRITE_MS, () => void writeAgents($).catch(() => { isAgentsWritePending = false }))
+  } catch {
+    isAgentsWritePending = false
+  }
+}
+
+// Never throws: it runs inside every subagent's tool calls and model
+// requests, which must go on whatever happens to the row.
+async function mark($: $, agentId: string, change: Partial<AgentActivity>) {
+  try {
+    const now = await $.clock.now()
+    agents[agentId] = { phase: null, ...agents[agentId], since: now, ...change }
+    scheduleAgentsWrite($)
+  } catch {
+    // The row stays as it was.
+  }
+}
+
 function claudeWindow(limits: { kind: string; percentUsed: number; resetsAt?: string }[]): Window | null {
   const five = limits.find(limit => limit.kind === 'five_hour')
   return five ? { percentUsed: five.percentUsed, resetsAt: five.resetsAt ? Date.parse(five.resetsAt) : null } : null
@@ -202,7 +263,13 @@ export const register: Register = on => {
     await $.fs.write(`${dir}/statusline.sh`, READER_SCRIPT)
     await $.fs.write(`${dir}/subagents.sh`, SUBAGENT_SCRIPT)
     // Files of sessions that ended without cleaning up (a crash, a kill).
-    await run($, ['find', dir, '(', '-name', '*.txt', '-o', '-name', '*.worktrees.json', ')', '-mtime', '+1', '-delete'])
+    await run($, ['find', dir, '(', '-name', '*.txt', '-o', '-name', '*.worktrees.json', '-o', '-name', '*.agents.json', ')', '-mtime', '+1', '-delete'])
+    // A reload starts the module over: pick up what it last wrote.
+    try {
+      agents = JSON.parse(await $.fs.read(agentsFile(dir, await $.session.id()))) as Record<string, AgentActivity>
+    } catch {
+      agents = {}
+    }
     const usage = await $.session.usage()
     data.context = usage.context
     data.claude = claudeWindow(usage.rateLimits)
@@ -210,7 +277,40 @@ export const register: Register = on => {
     void refresh($)
     ticker?.cancel()
     ticker = $.clock.every(REFRESH_MS, () => void refresh($))
+    agentsTicker?.cancel()
+    agentsTicker = $.clock.every(AGENTS_TICK_MS, () => {
+      if (Object.keys(agents).length) scheduleAgentsWrite($)
+    })
     return next(e)
+  })
+
+  // A subagent's model request: it is thinking until the response is in.
+  // Tools can start while the response is still streaming in, so a tool call
+  // in flight outranks thinking at either end.
+  on('turn.step', async function* ($, e, next) {
+    if (e.agentId === undefined) return yield* next(e)
+    const agentId = e.agentId
+    if (!toolsInFlight.get(agentId)) await mark($, agentId, { phase: 'thinking', activity: undefined, endedAt: undefined })
+    try {
+      return yield* next(e)
+    } finally {
+      if (!toolsInFlight.get(agentId)) await mark($, agentId, { phase: null })
+    }
+  })
+
+  // A subagent's tool call: what it runs, until the last call in flight ends.
+  on('tool.call', async ($, e, next) => {
+    if (e.agentId === undefined) return next(e)
+    const agentId = e.agentId
+    toolsInFlight.set(agentId, (toolsInFlight.get(agentId) ?? 0) + 1)
+    await mark($, agentId, { phase: 'tool', activity: activityText(e.tool, e as unknown as Record<string, unknown>) })
+    try {
+      return await next(e)
+    } finally {
+      const left = (toolsInFlight.get(agentId) ?? 1) - 1
+      toolsInFlight.set(agentId, left)
+      if (!left) await mark($, agentId, { phase: null, activity: undefined })
+    }
   })
 
   // Context and the Claude window come pushed from the engine after each turn.
@@ -221,16 +321,21 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // The main session's turns refresh the line; a subagent's turn ending is
+  // only noted, since its row says how long it took.
   on('turn.complete', async ($, e, next) => {
-    void refresh($)
+    if (e.agentId !== undefined) await mark($, e.agentId, { phase: null, activity: undefined, endedAt: await $.clock.now() })
+    else void refresh($)
     return next(e)
   })
 
   on('session.end', async ($, e, next) => {
     ticker?.cancel()
     ticker = null
+    agentsTicker?.cancel()
+    agentsTicker = null
     const dir = await linesDir($)
-    await run($, ['rm', '-f', `${dir}/${e.sessionId}.txt`, `${dir}/${e.sessionId}.worktrees.json`])
+    await run($, ['rm', '-f', `${dir}/${e.sessionId}.txt`, `${dir}/${e.sessionId}.worktrees.json`, agentsFile(dir, e.sessionId)])
     return next(e)
   })
 }

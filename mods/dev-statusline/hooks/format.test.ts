@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { COLORS, formatStatus, paint, parseOpenPrs, parseWorktrees, plain, worktreeName, parseChecks, parseCodexLine, parseCodexLive, parseThreads, tokensText, type StatusData } from './format'
+import { COLORS, activityText, agentsText, durationText, formatStatus, paint, parseOpenPrs, parseWorktrees, plain, worktreeName, parseChecks, parseCodexLine, parseCodexLive, parseThreads, tokensText, type StatusData } from './format'
 
 // The status line as plain text, colour codes removed.
 const show = (data: StatusData, now: number) => plain(formatStatus(data, now))
@@ -183,5 +183,44 @@ describe('worktrees', () => {
     const text = formatStatus({ ...base, repo: 'Muse', worktree: 'DEV-67', branch: 'feat/DEV-67' }, NOW)
     expect(text.split('\n')[0]).toBe(`${paint('repo', 'Muse')}${paint('dim', '/DEV-67')} ${paint('dim', '(')}feat/DEV-67${paint('dim', ')')}`)
     expect(show({ ...base, repo: 'Muse', worktree: 'pr-19', branch: 'b8e72fe', isDetached: true }, NOW).split('\n')[0]).toBe('Muse/pr-19 (detached b8e72fe)')
+  })
+})
+
+describe('subagents', () => {
+  test('durations read as seconds, then minutes and seconds, then hours and minutes', () => {
+    expect([42_000, 372_000, 3_900_000, -5].map(durationText)).toEqual(['42s', '6m12s', '1h05m', '0s'])
+  })
+
+  test('activity names the command, file, pattern or task, cut to 40 characters', () => {
+    expect(activityText('Bash', { command: 'npm test' })).toBe('Bash: npm test')
+    expect(activityText('Bash', { command: 'python3 -I /home/me/.agents/skills/repo-wiki/scripts/extract.py --repo x', description: 'Extract the code graph' }))
+      .toBe('Bash: Extract the code graph')
+    expect(activityText('Read', { file_path: '/repo/scripts/extract.py' })).toBe('Read extract.py')
+    expect(activityText('Grep', { pattern: 'def main' })).toBe('Grep def main')
+    expect(activityText('Agent', { description: 'Research core' })).toBe('Agent: Research core')
+    expect(activityText('mcp__claude_ai_Atlassian__getJiraIssue', { issueIdOrKey: 'DEV-67' })).toBe('getJiraIssue')
+    expect(activityText('TodoWrite', {})).toBe('TodoWrite')
+    const long = activityText('Bash', { command: `echo ${'x'.repeat(60)}` })
+    expect(long.length).toBe(40)
+    expect(long.endsWith('…')).toBe(true)
+  })
+
+  test('the agents line counts running, idle and waiting agents once two or more are at work', () => {
+    const list = [
+      { id: 'a', status: 'running' }, { id: 'b', status: 'running' }, { id: 'c', status: 'running' },
+      { id: 'd', status: 'waiting' }, { id: 'e', status: 'completed' },
+    ]
+    const activity = {
+      a: { phase: 'tool' as const, since: NOW - 300_000 },
+      b: { phase: null, since: NOW - 90_000 },
+      c: { phase: null, since: NOW - 5_000 },
+    }
+    expect(plain(agentsText(list, activity, NOW)!)).toBe('4 agents · 2 running · 1 idle · 1 waiting')
+    expect(agentsText([{ id: 'a', status: 'running' }, { id: 'e', status: 'completed' }], activity, NOW)).toBeNull()
+  })
+
+  test('the agents line goes third, under the usage line', () => {
+    expect(show({ ...base, agents: '3 agents · 3 running' }, NOW).split('\n')[2]).toBe('3 agents · 3 running')
+    expect(show({ ...base, agents: null }, NOW).split('\n')).toHaveLength(2)
   })
 })

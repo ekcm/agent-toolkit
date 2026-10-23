@@ -153,14 +153,27 @@ What each part shows:
 
 Worktrees: inside a linked git worktree the first line still leads with the project, the main repository's folder name, followed by the worktree's folder, dim: `Muse/DEV-67 (feat/DEV-67-wiki-link-resolver)`. A detached checkout shows `(detached <commit>)`, and its PR is the open one containing that commit, so pr-review-board's review checkouts show their PR too.
 
-Subagents: when Claude Code runs subagents, for example one per worktree, the mod also draws their rows in the agent panel under the prompt, as a tree:
+Subagents: when Claude Code runs subagents, the mod also draws their rows in the agent panel under the prompt, as a tree. An agent launched by another agent sits under it:
 
 ```
-├─ DEV-67   running · ✓ checks · 0/5 resolved · 48k tokens
-└─ DEV-70   done    · ✗ 1 failing · no threads · 112k tokens
+├─ DEV-67                      running  6m42s  · ✓ checks · 0/5 resolved · Bash: npm test 34s · 48k tokens
+└─ Generating wiki for Arcana  running  4m40s  · Agent: Research frontend · 61k tokens
+   ├─ Research core            running  3m50s  · Read extract.py · 52k tokens
+   ├─ Research API             idle     3m50s  · nothing for 2m05s · 40k tokens
+   └─ Research evals           ✓ done   in 2m50s · 35k tokens
 ```
 
-Each row names the worktree the subagent works in (or the subagent, outside any worktree), its status, that worktree's PR and its tokens. The mod ships this as the plugin's `subagentStatusLine` setting, so it needs no settings entry; it runs `~/.agent-toolkit/dev-statusline/subagents.sh`, which the mod writes on start-up. The PR states come from one `gh` call listing the repository's open PRs, made only when the repository has more than one worktree.
+Each row names the worktree the subagent works in (or the subagent, outside any worktree), then:
+
+- **State and time:** `running` or `waiting` with how long it has been going; `✓ done in 2m50s` (green), `✗ failed after 1m10s` (red) or `stopped` once it ends. Claude Code keeps an ended row for a while, then drops it.
+- **Idle:** a running agent with no model request or tool call in flight for a minute shows as `idle` (yellow) with `nothing for 2m05s`, so a stuck agent stands out from a busy one.
+- **That worktree's PR**, as on the first line.
+- **What it is doing now:** the tool call in flight, with the command, file, pattern or task it was given (`Bash: npm test`, `Read extract.py`, `Agent: Research core`), and how long it has been running once that passes 10 seconds; or `thinking` while it waits on the model. It is cut to fit the terminal's width.
+- **Its tokens.**
+
+When two or more subagents are at work, a third status line sums them up: `4 agents · 2 running · 1 idle · 1 waiting`.
+
+The mod ships the rows as the plugin's `subagentStatusLine` setting, so they need no settings entry; it runs `~/.agent-toolkit/dev-statusline/subagents.sh`, which the mod writes on start-up. Claude Code gives that script each subagent's status, start time and tokens; the mod adds the rest from its hooks on subagents' model requests and tool calls, and the engine's list of agents (for who launched whom), in `~/.agent-toolkit/dev-statusline/<session id>.agents.json`. The main session's own tool calls are not tracked. The PR states come from one `gh` call listing the repository's open PRs, made only when the repository has more than one worktree.
 
 Several sessions share one Codex reading: the first to need it asks Codex and saves it to `~/.agent-toolkit/dev-statusline/codex.json`, and the others reuse it for a minute.
 

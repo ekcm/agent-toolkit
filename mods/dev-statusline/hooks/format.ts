@@ -24,7 +24,30 @@ export type StatusData = {
   context: { tokens?: number; percent?: number; window: number } | null
   claude: Window | null
   codex: Window | null
+  // A third line summing up the subagents, when several are at work.
+  agents?: string | null
 }
+
+// What a subagent is doing as the mod last saw it, for its row. The row
+// script reads these by agent id, beside what Claude Code gives it.
+export type AgentActivity = {
+  // The agent that launched it; absent when the main session did.
+  parent?: string
+  // A model request or a tool call in flight; null between them.
+  phase: 'thinking' | 'tool' | null
+  // The tool call in flight, shortened (`Bash: extract.py --repo …`).
+  activity?: string
+  // When the phase began, or when the last one ended (ms since epoch).
+  since: number
+  // When its last turn ended; cleared when it starts another.
+  endedAt?: number
+}
+
+// Past this long with nothing in flight, a running agent counts as idle.
+export const IDLE_MS = 60_000
+
+// Longest activity text on a row, so the row doesn't wrap.
+const ACTIVITY_WIDTH = 40
 
 const FAILED = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE'])
 const SKIPPED = new Set(['SKIPPED', 'NEUTRAL', 'STALE'])
@@ -174,7 +197,69 @@ export function formatStatus(data: StatusData, now: number): string {
   const where = data.repo ? `${paint('repo', data.repo)}${worktree}${branch}` : null
   const first = [where, data.repo ? prText(data.pr) : null].filter(Boolean).join(SEPARATOR)
   const second = [contextText(data.context), windowText('claude', data.claude, now), windowText('codex', data.codex, now)].join(SEPARATOR)
-  return first ? `${first}\n${second}` : second
+  return [first, second, data.agents].filter(Boolean).join('\n')
+}
+
+// 42_000 → 42s, 372_000 → 6m12s, 3_900_000 → 1h05m.
+export function durationText(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000))
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, '0')}s`
+  return `${Math.floor(seconds / 3600)}h${String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')}m`
+}
+
+function shorten(text: string, width: number): string {
+  const line = text.replace(/\s+/g, ' ').trim()
+  return line.length > width ? `${line.slice(0, width - 1)}…` : line
+}
+
+function baseName(path: unknown): string {
+  return typeof path === 'string' ? path.split('/').filter(Boolean).pop() ?? path : ''
+}
+
+// What a tool call is doing, in a few words: the command (or, for a long one,
+// its description) for Bash, the file for the file tools, the pattern for
+// searches, the task for Agent.
+export function activityText(tool: string, input: Record<string, unknown>): string {
+  const text = (key: string) => typeof input[key] === 'string' ? input[key] as string : ''
+  let detail = ''
+  if (tool === 'Bash') detail = text('description') && text('command').length > ACTIVITY_WIDTH ? text('description') : text('command')
+  else if (['Read', 'Edit', 'Write', 'NotebookEdit'].includes(tool)) detail = baseName(input.file_path ?? input.notebook_path)
+  else if (tool === 'Grep' || tool === 'Glob') detail = text('pattern')
+  else if (tool === 'Agent') detail = text('description')
+  else if (tool === 'WebFetch') detail = text('url').replace(/^https?:\/\//, '')
+  else if (tool === 'WebSearch') detail = text('query')
+  else if (tool === 'Skill') detail = text('skill')
+  // An MCP tool goes by its own name, without the mcp__<server>__ prefix.
+  const name = tool.startsWith('mcp__') ? tool.split('__').slice(2).join('__') || tool : tool
+  if (!detail) return shorten(name, ACTIVITY_WIDTH)
+  return shorten(`${name}${tool === 'Bash' || tool === 'Agent' ? ':' : ''} ${detail}`, ACTIVITY_WIDTH)
+}
+
+// `3 agents · 2 running · 1 idle` once two or more are at work; null for
+// fewer, whose own rows say as much. `waiting` is an agent held on work of its
+// own (its agents, a background command).
+export function agentsText(list: { id: string; status: string }[], activity: Record<string, AgentActivity>, now: number): string | null {
+  let running = 0
+  let idle = 0
+  let waiting = 0
+  for (const agent of list) {
+    const seen = activity[agent.id]
+    if (agent.status === 'waiting') waiting += 1
+    else if (agent.status === 'idle') idle += 1
+    else if (agent.status === 'running' || agent.status === 'pending') {
+      if (seen && !seen.phase && now - seen.since >= IDLE_MS) idle += 1
+      else running += 1
+    }
+  }
+  const total = running + idle + waiting
+  if (total < 2) return null
+  return [
+    `${total} agents`,
+    running ? `${running} running` : '',
+    idle ? paint('warn', `${idle} idle`) : '',
+    waiting ? `${waiting} waiting` : '',
+  ].filter(Boolean).join(SEPARATOR)
 }
 
 export type Worktree = { path: string; head: string | null; branch: string | null }

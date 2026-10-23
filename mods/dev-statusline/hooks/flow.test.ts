@@ -18,6 +18,8 @@ type Fake = {
   isCodexLive: boolean
   files: Map<string, string>
   ran: string[]
+  // The agents file as it stood while a subagent's tool call ran.
+  duringTool?: string
 }
 
 const PR_12 = { number: 12, statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] }
@@ -39,6 +41,19 @@ function fakeHost(on: On, prState: Fake['prState'] = 'open'): Fake {
   on('turn.complete', () => ({ text: 'done' }))
   on('clock.now', () => ({ value: Date.parse('2026-10-11T10:00:00Z') }))
   on('clock.every', () => ({ deny: 'no timers in this test' }))
+  // A one-off timer fires at once, so agent activity is written straight away.
+  on('clock.after', () => ({ value: undefined }))
+  on('agent.list', () => ({ value: [
+    { id: 'lead', description: 'Generating wiki for Arcana', type: 'general-purpose', status: 'running' },
+    { id: 'core', description: 'Research core', type: 'general-purpose', status: 'running', parentId: 'lead' },
+  ] }))
+  // A subagent's tool call: it runs until the activity file shows it.
+  on('tool.call', async () => {
+    const path = `${DIR}/session-1.agents.json`
+    for (let i = 0; i < 5000 && !fake.files.get(path)?.includes('"tool"'); i += 1) await Promise.resolve()
+    fake.duringTool = fake.files.get(path)
+    return { result: 'ok' }
+  })
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
   on('session.cwd', () => ({ value: '/repo' }))
   on('session.usage', () => ({ value: {
@@ -144,7 +159,7 @@ test('the session ending removes its lines', async ($, on) => {
   await $.session.start(START)
   await written(fake, text => text.includes('codex 5h 70% left'))
   await $.session.end({ reason: 'prompt_input_exit', sessionId: 'session-1' } as never)
-  expect(fake.ran).toContain(`rm -f ${DIR}/session-1.txt ${DIR}/session-1.worktrees.json`)
+  expect(fake.ran).toContain(`rm -f ${DIR}/session-1.txt ${DIR}/session-1.worktrees.json ${DIR}/session-1.agents.json`)
 })
 
 test('without a live Codex answer, the newest session log is used', async ($, on) => {
@@ -193,4 +208,24 @@ test('a stale shared Codex reading is replaced by a live one, which is shared in
   await $.session.start(START)
   await written(fake, text => text.includes('codex 5h 70% left'))
   expect(JSON.parse(fake.files.get(`${DIR}/codex.json`)!)).toEqual({ at: now, codex: { percentUsed: 30, resetsAt: Date.parse('2026-10-11T12:00:00Z') } })
+})
+
+test('a subagent\'s tool call is written for its row, with its parent, and cleared when it ends', async ($, on) => {
+  const fake = fakeHost(on)
+  await $.session.start(START)
+  await written(fake, text => text.includes('codex 5h 70% left'))
+  await $.tool.call({ tool: 'Bash', command: 'npm test', agentId: 'core' } as never)
+  const activity = (text?: string) => JSON.parse(text ?? '{}') as Record<string, { parent?: string; phase: string | null; activity?: string }>
+  for (let i = 0; i < 5000 && activity(fake.files.get(`${DIR}/session-1.agents.json`)).core?.phase !== null; i += 1) await Promise.resolve()
+  expect(activity(fake.duringTool).core).toMatchObject({ parent: 'lead', phase: 'tool', activity: 'Bash: npm test' })
+  expect(activity(fake.files.get(`${DIR}/session-1.agents.json`)).core).toMatchObject({ parent: 'lead', phase: null })
+  expect(activity(fake.files.get(`${DIR}/session-1.agents.json`)).lead).toMatchObject({ phase: null })
+})
+
+test('the main session\'s own tool calls are not tracked', async ($, on) => {
+  const fake = fakeHost(on)
+  await $.session.start(START)
+  await written(fake, text => text.includes('codex 5h 70% left'))
+  await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  expect(fake.files.has(`${DIR}/session-1.agents.json`)).toBe(false)
 })
