@@ -58,6 +58,7 @@ Each folder in `skills/` is a standard `SKILL.md` skill: frontmatter with only `
 | `retrieve-pull-request-comments`  | Fetch and summarise review comments on the current branch's PR                |
 | `draft-pr-description`            | Write `PR.md` from the branch's commits and changes                           |
 | `handover-session-notes`          | Save session context to `NOTES.md` for the next session                       |
+| `repo-wiki`                       | Interactive, verified wiki of a repo or monorepo component, kept outside it   |
 
 
 Invoke a skill by name — `/name` in Claude Code, `$name` in Codex.
