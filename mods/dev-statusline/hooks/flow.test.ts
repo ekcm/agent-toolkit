@@ -44,7 +44,7 @@ function fakeHost(on: On, prState: Fake['prState'] = 'open'): Fake {
   // A one-off timer fires at once, so agent activity is written straight away.
   on('clock.after', () => ({ value: undefined }))
   on('agent.list', () => ({ value: [
-    { id: 'lead', description: 'Generating wiki for Arcana', type: 'general-purpose', status: 'running' },
+    { id: 'lead', description: 'Generating wiki for my-app', type: 'general-purpose', status: 'running' },
     { id: 'core', description: 'Research core', type: 'general-purpose', status: 'running', parentId: 'lead' },
   ] }))
   // A subagent's tool call: it runs until the activity file shows it.

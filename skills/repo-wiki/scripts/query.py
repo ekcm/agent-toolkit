@@ -13,9 +13,9 @@ Usage: python query.py <workspace> <command> [args]
   orphans                 units nothing references (dead-code candidates)
   groups                  feature groups with size, cohesion, instability and their main dependencies
   infra                   detected infrastructure (databases, caches, brokers...) and the units using each
-  brief <area>            structure of one area, to paste into a research brief: its units, entry points,
-                          infrastructure and tables, links to other groups, and key call sites.
-                          <area> is a group id (or its part after "::") or a path prefix
+  brief <area>...         structure of an area, for a research brief: its most important units, entry points,
+                          infrastructure and tables, links to other groups, and key call sites, each list capped.
+                          Each <area> is a group id (or its part after "::"), a folder or a file; several are combined
 """
 import json
 import os
@@ -58,6 +58,7 @@ def split_method(g, key):
 
 ARITY = {"top": 0, "entries": 0, "node": 1, "callers": 1, "callees": 1, "path": 2, "search": 1, "layer": 1, "orphans": 0, "groups": 0, "infra": 0, "brief": 1}
 RANKS = {"core", "drives", "onPath", "depended", "churn"}
+BRIEF_UNITS, BRIEF_ROWS = 20, 15  # a brief is read in full by every research agent before it starts, so it stays short
 
 
 def main():
@@ -154,40 +155,48 @@ def main():
                 for u in users[:25]:
                     print(f"    {u}")
     elif cmd == "brief":
-        key = " ".join(args).strip().rstrip("/")
+        keys = [a.strip().rstrip("/") for a in args if a.strip()]
         gids = [gr["id"] for gr in g.get("groups", [])]
-        match = [x for x in gids if x == key or x.split("::")[-1] == key]
-        if match:
-            members = [n for n in g["nodes"] if n["type"] == "unit" and n.get("group") in match]
-            title = ", ".join(match)
-        else:
-            members = [n for n in g["nodes"] if n["type"] == "unit" and (n.get("path") or "").startswith(key + "/")]
-            title = f"path {key}/"
-        if not members:
-            sys.exit(f"No units in {key!r}. Use a group id from `query.py <ws> groups` or a folder path.")
+        members, titles = [], []
+        for key in keys:
+            match = [x for x in gids if x == key or x.split("::")[-1] == key]
+            if match:
+                found = [n for n in g["nodes"] if n["type"] == "unit" and n.get("group") in match]
+                titles.append(", ".join(match))
+            else:
+                found = [n for n in g["nodes"] if n["type"] == "unit" and ((n.get("path") or "") == key or (n.get("path") or "").startswith(key + "/"))]
+                titles.append(key)
+            if not found:
+                sys.exit(f"No units in {key!r}. Use a group id from `query.py <ws> groups`, a folder path or a file path.")
+            members += [n for n in found if n not in members]
         ids = {n["id"] for n in members}
         group_of = {n["id"]: n.get("group") for n in g["nodes"]}
         layers = {}
         for n in members:
             layers[n["layer"]] = layers.get(n["layer"], 0) + 1
-        print(f"AREA {title}: {len(members)} units (" + ", ".join(f"{k} {v}" for k, v in sorted(layers.items(), key=lambda x: -x[1])) + ")")
-        print("\nUNITS, most important first (id | layer | path:line | in/out | tests)")
-        for n in sorted(members, key=lambda n: -n["scores"]["core"])[:40]:
+        ranked = sorted(members, key=lambda n: -n["scores"]["core"])
+        print(f"AREA {' + '.join(titles)}: {len(members)} units (" + ", ".join(f"{k} {v}" for k, v in sorted(layers.items(), key=lambda x: -x[1])) + ")")
+        print(f"\nUNITS, most important first (id | layer | path:line | in/out | tests)")
+        for n in ranked[:BRIEF_UNITS]:
             print(f"  {n['id']} | {n['layer']} | {loc(n)} | {n['inDegree']}/{n['outDegree']} | {len(n.get('tests', []))}")
-        if len(members) > 40:
-            print(f"  ... {len(members) - 40} more (query.py search <text> to find them)")
+        if len(members) > BRIEF_UNITS:
+            print(f"  ... {len(members) - BRIEF_UNITS} more: " + ", ".join(sorted({os.path.dirname(n['path']) for n in ranked[BRIEF_UNITS:]}))[:400] + " (query.py search <text> lists them)")
         ents = [n for n in g["nodes"] if n["type"] == "entry" and n.get("target") in ids]
         if ents:
             print("\nENTRY POINTS into this area")
-            for n in ents[:30]:
+            for n in ents[:BRIEF_ROWS]:
                 print(f"  {n['id']} -> {n['target']}{'.' + n['handler'] if n.get('handler') else ''}  {loc(n)}")
+            if len(ents) > BRIEF_ROWS:
+                print(f"  ... {len(ents) - BRIEF_ROWS} more (query.py entries)")
         outside = [e for e in edges if (e["source"] in ids) != (e["target"] in ids)]
         stores = [e for e in outside if (nodes.get(e["target"], {}).get("type") in ("infra", "table")) or (nodes.get(e["source"], {}).get("type") in ("infra", "table"))]
         if stores:
             print("\nINFRASTRUCTURE AND TABLES touched")
-            for e in stores[:30]:
+            for e in stores[:BRIEF_ROWS]:
                 inside = e["source"] if e["source"] in ids else e["target"]
                 print(f"  {e['source']} -[{e['kind']}]-> {e['target']}  ({nodes[inside].get('path')}:{e.get('line')})")
+            if len(stores) > BRIEF_ROWS:
+                print(f"  ... {len(stores) - BRIEF_ROWS} more (query.py node <id>)")
         out_g, in_g = {}, {}
         for e in outside:
             if e["source"] in ids and group_of.get(e["target"]):
@@ -195,17 +204,17 @@ def main():
             elif e["target"] in ids and group_of.get(e["source"]):
                 in_g[group_of[e["source"]]] = in_g.get(group_of[e["source"]], 0) + 1
         if out_g:
-            print("\nDEPENDS ON other groups: " + ", ".join(f"{k} ({v})" for k, v in sorted(out_g.items(), key=lambda x: -x[1])[:10]))
+            print("\nDEPENDS ON other groups: " + ", ".join(f"{k} ({v})" for k, v in sorted(out_g.items(), key=lambda x: -x[1])[:8]))
         if in_g:
-            print("USED BY other groups: " + ", ".join(f"{k} ({v})" for k, v in sorted(in_g.items(), key=lambda x: -x[1])[:10]))
+            print("USED BY other groups: " + ", ".join(f"{k} ({v})" for k, v in sorted(in_g.items(), key=lambda x: -x[1])[:8]))
         calls = []
-        for n in sorted(members, key=lambda n: -n["scores"]["core"])[:12]:
+        for n in ranked[:8]:
             for caller_fn, dst, name, ln in n.get("calls", []):
                 if dst != n["id"]:
                     calls.append(f"  {n['path']}:{ln}  {n['id']}.{caller_fn} -> {nodes.get(dst, {}).get('label', dst)}.{name}()")
         if calls:
-            print("\nKEY CALL SITES from the most important units (resolved calls only; confirm in the source)")
-            print("\n".join(calls[:30]))
+            print("\nKEY CALL SITES from the most important units (resolved calls only; confirm in the source; query.py callees <unit> for the rest)")
+            print("\n".join(calls[:BRIEF_ROWS]))
     elif cmd == "orphans":
         for n in g["nodes"]:
             if n["type"] == "unit" and n["inDegree"] == 0:

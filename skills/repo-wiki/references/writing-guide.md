@@ -1,6 +1,6 @@
 # Researching and writing the wiki
 
-The graph tells you what is connected. The wiki tells a newcomer what matters, how work moves, and where it breaks. Everything you write must come from code you have read in this session.
+The graph tells you what is connected. The wiki tells a newcomer what matters and how work moves through the code. It explains; it does not review. Do not look for bugs, risks or problems, and do not write about them. Everything you write must come from code you have read in this session.
 
 ## Research order
 
@@ -10,14 +10,13 @@ The graph tells you what is connected. The wiki tells a newcomer what matters, h
 4. **Find the state.** Search for enums or columns named status, state, stage, phase. Find every writer (`query.py <ws> callers <method>`). If the transitions are spread across several files, it deserves a state machine.
 5. **Read the top units** you have not met yet in `query.py <ws> top 30`. Write a summary for each as you go.
 6. **Name the architecture.** `query.py <ws> groups` and `query.py <ws> infra`. Give the largest and most connected groups a plain-language label and a one-paragraph `body`: what they own, what they depend on, which infrastructure they touch. Check each infrastructure node's evidence line; if the extractor missed something the code clearly uses (another service, a queue it reaches through a library), add it under `extras` with a `kind`. The architecture view is what a reader explains the system from, so it must be right.
-7. **Look for trouble** while you read (see Gotchas). Check `query.py <ws> orphans` for dead code.
-8. **Find the tests** for each key part (the node's `tests` field, or search the test folders).
+7. **Find the tests** for each key part (the node's `tests` field, or search the test folders).
 
 On a large repository, do steps 2 to 4 for the two or three most important components only, and say in the overview which parts the wiki covers in depth.
 
 ## Groups and coupling
 
-The page shows each feature group's cohesion (share of its code dependencies that stay inside it) and instability (Ce / (Ca + Ce)). Use them in the group bodies and gotchas when they say something: a large group with low cohesion is usually several concepts in one package; a group with instability near 0 that many others depend on is where changes ripple furthest; a cycle between two groups is worth a gotcha.
+The page shows each feature group's cohesion (share of its code dependencies that stay inside it) and instability (Ce / (Ca + Ce)). Use them in the group bodies when they say something: a large group with low cohesion is usually several concepts in one package; a group with instability near 0 that many others depend on is where changes ripple furthest.
 
 ## What makes a key part
 
@@ -26,7 +25,6 @@ Pick 5 to 12. A key part is code a newcomer must understand before changing anyt
 - **It holds a rule:** a state machine, a uniqueness or ordering guarantee, money or permission logic.
 - **It is a boundary:** the one place that talks to another service, a queue or the database for a given concept.
 - **Everything goes through it:** an orchestrator or a shared query that many flows depend on.
-- **It is fragile:** no tests, frequent changes, swallowed errors, or surprising behaviour.
 
 High importance scores are a hint, not a reason. A logger can top the "depended on" ranking and still not be a key part.
 
@@ -39,19 +37,6 @@ High importance scores are a hint, not a reason. A logger can top the "depended 
 - Put `async` on the first step that runs later (for example the worker picking up the task), not on the step that enqueues it, and say what triggers it.
 - Include the storage writes and outbound calls as steps (table and external nodes), since those are what a reader most often needs.
 
-## Gotchas
-
-Only things you saw in the code. Each needs the exact line and an `expect`. Good sources:
-
-- values computed once at startup or class load that look like they should be per request
-- caught-and-ignored errors, retries without limits, batches that can be starved
-- missing transactions around multi-step writes
-- checks that one endpoint does and its sibling skips
-- configuration that disagrees with the code, and documentation that disagrees with routes
-- unused code, flags and tables
-
-Severity: `bug` is wrong behaviour today; `risk` is behaviour that will go wrong under plausible conditions; `design` is a deliberate choice with a cost a newcomer must know; `cleanup` is dead or misleading code.
-
 ## Change recipes
 
 2 to 5 changes a newcomer is likely to be asked to make (add an endpoint, add a field end to end, add a job, support a new variant). Derive them from how the existing examples are built: find two similar existing features and list what each touched. Steps are imperative ("Add the value to `ProductType`") with a ref to the place to edit.
@@ -61,6 +46,7 @@ Severity: `bug` is wrong behaviour today; `risk` is behaviour that will go wrong
 - Write for a developer who is new to this repository but not to programming.
 - Lead with what something does and why it matters; keep mechanics for the source link.
 - Plain, specific sentences. Name the actual class, table, field or number.
+- Read, never run. Do not write code, scripts or test programs, and do not run the repository's code or tools to see what they do: what the code says is what goes in the wiki.
 - No speculation. If you could not confirm something, leave it out or say it is unconfirmed.
 - Domain terms go in the glossary with their meaning first and their name in the code second.
 

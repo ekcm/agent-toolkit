@@ -2,9 +2,12 @@
 
 Usage:
   python build.py <workspace>                 verify, then write <workspace>/repo-wiki.html
+  python build.py <workspace> --draft         write a draft page from the graph alone, before any research
   python build.py <workspace> --set-url URL   record where the page was published (manifest.json)
 
-The build refuses to run while verify.py reports errors.
+The build refuses to run while verify.py reports errors. A draft makes no claims, so it is not verified:
+it has the map, code map, entry points, source viewer and Ask tab, and a note that research is under way.
+It refuses to overwrite a page built from a wiki, so a refresh never replaces a finished page with a draft.
 """
 import json
 import os
@@ -37,6 +40,19 @@ def write_manifest(ws, **fields):
     return data
 
 
+def draft_wiki(g):
+    """A wiki with no researched content: the page falls back to what the graph shows."""
+    units = [n for n in g["nodes"] if n["type"] == "unit"]
+    entries = [n for n in g["nodes"] if n["type"] == "entry"]
+    langs = ", ".join(g.get("languages") or {}) or "no supported language"
+    comps = ", ".join(c["label"] for c in g.get("components", [])) or "one component"
+    return {"title": g["repo"], "draft": True,
+            "overview": f"{g['repo']} has {len(units)} units of code in {langs}, across {comps}, with {len(entries)} entry points. "
+                        "This first page is drawn from the code graph alone: the map, the most important units, the entry points and the source. "
+                        "Flows, key parts and the glossary are being researched and checked now, and replace this page at the same link when they are done. "
+                        "Until then, the Ask tab answers questions about the code."}
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
@@ -46,15 +62,24 @@ def main():
         print(f"recorded {m['artifactUrl']} in {os.path.join(ws, 'manifest.json')}")
         return
 
-    errors, warnings = verify(ws)
-    for w in warnings:
-        print(f"warning: {w}")
-    if errors:
-        for e in errors:
-            print(f"error: {e}")
-        sys.exit(f"\nNot built: {len(errors)} verification error(s).")
-
-    g, w, src = load(ws, "graph.json"), load(ws, "wiki.json"), load(ws, "sources.json")
+    draft = sys.argv[2:] == ["--draft"]
+    if draft:
+        m = load(ws, "manifest.json") if os.path.exists(os.path.join(ws, "manifest.json")) else {}
+        if m.get("builtAt") and not m.get("draft"):
+            sys.exit("Not built: this workspace already has a finished page; a draft would replace it. Refresh it instead.")
+        g, src = load(ws, "graph.json"), load(ws, "sources.json")
+        w = draft_wiki(g)
+    elif len(sys.argv) > 2:
+        sys.exit(__doc__)
+    else:
+        errors, warnings = verify(ws)
+        for w in warnings:
+            print(f"warning: {w}")
+        if errors:
+            for e in errors:
+                print(f"error: {e}")
+            sys.exit(f"\nNot built: {len(errors)} verification error(s).")
+        g, w, src = load(ws, "graph.json"), load(ws, "wiki.json"), load(ws, "sources.json")
     by_id = {n["id"]: n for n in g["nodes"]}
     extras = w.get("extras", {}) or {}
     for n in extras.get("nodes", []):
@@ -96,8 +121,8 @@ def main():
     with open(out, "w") as fh:
         fh.write(html)
     m = write_manifest(ws, repo=g["repo"], root=g["root"], scope=g.get("scope"), commit=g["commit"], title=page_title,
-                       html=out, builtAt=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
-    print(f"built {out} ({size // 1024} KB) for {g['repo']} @ {g['commit']}")
+                       html=out, builtAt=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), draft=draft)
+    print(f"built {'a draft ' if draft else ''}{out} ({size // 1024} KB) for {g['repo']} @ {g['commit']}")
     if m.get("artifactUrl"):
         print(f"previously published at {m['artifactUrl']}: update that page instead of creating a new one")
 

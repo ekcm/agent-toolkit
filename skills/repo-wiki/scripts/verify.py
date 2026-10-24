@@ -20,7 +20,6 @@ import re
 import subprocess
 import sys
 
-SEVERITIES = {"bug", "risk", "design", "cleanup"}
 REF_IN_TEXT = re.compile(r"`([\w./@-]+\.[\w]+):(\d+)(?:-(\d+))?`")
 NODE_LINK = re.compile(r"\[\[([^\]]+)\]\]")
 
@@ -43,7 +42,7 @@ def walk_text(obj, path=""):
 
 KINDS = {"database", "cache", "queue", "storage", "search", "auth", "service"}
 LIST_SECTIONS = {"groups": "id", "components": "id", "keyParts": "title", "flows": "id", "recipes": "title", "stateMachines": "id",
-                 "gotchas": "title", "glossary": "term"}
+                 "glossary": "term"}
 
 
 def check_shape(w):
@@ -51,6 +50,8 @@ def check_shape(w):
     errs = []
     if not isinstance(w, dict):
         return ["wiki.json must be a JSON object"]
+    if "gotchas" in w:
+        errs.append("gotchas are not part of the wiki; remove the section")
     for key in ("title", "overview"):
         if key in w and not isinstance(w[key], str):
             errs.append(f"{key} must be a string")
@@ -300,14 +301,6 @@ def verify(ws, wiki_path=None, fragment=False, base=False):
                     errors.append(f"stateMachines[{i}].transitions[{j}]: {end} {t.get(end)!r} is not a listed state (or start/any)")
             check_ref(t.get("ref"), f"stateMachines[{i}].transitions[{j}]", t.get("expect"))
 
-    for i, gt in enumerate(w.get("gotchas", [])):
-        for f in ("title", "body", "ref", "expect"):
-            if not gt.get(f):
-                errors.append(f"gotchas[{i}]: missing {f}")
-        if gt.get("severity") not in SEVERITIES:
-            errors.append(f"gotchas[{i}]: severity must be one of {sorted(SEVERITIES)}")
-        check_ref(gt.get("ref"), f"gotchas[{i}]", gt.get("expect"))
-
     for nid in (w.get("summaries") or {}):
         check_node(nid, f"summaries[{nid!r}]")
     known_layers = {l["id"] for l in g["layers"]}
@@ -351,8 +344,6 @@ def verify(ws, wiki_path=None, fragment=False, base=False):
         warnings.append(f"{len(uncovered)} entry points are in no flow: " + ", ".join(uncovered[:12]) + (" ..." if len(uncovered) > 12 else ""))
     if not w.get("glossary"):
         warnings.append("glossary is empty")
-    if not w.get("gotchas"):
-        warnings.append("gotchas is empty; say so in the overview if the code really has none worth flagging")
     return errors, warnings
 
 

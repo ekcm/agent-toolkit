@@ -53,6 +53,10 @@ header.top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; pad
 .stamp { font-family: var(--f-mono); font-size: 11.5px; color: var(--muted); }
 .stamp b { color: var(--ink); font-weight: 500; }
 .stamp .dirty { color: var(--warn); }
+.building { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 500; }
+.building::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: .3 } 50% { opacity: 1 } }
+@media (prefers-reduced-motion: reduce) { .building::before { animation: none; } }
 .search { position: relative; margin-left: auto; flex: 0 1 320px; min-width: 180px; }
 .search input { width: 100%; padding: 7px 10px 7px 30px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); }
 .search svg { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--faint); }
@@ -147,11 +151,6 @@ aside.panel { border-left: 1px solid var(--line); background: var(--surface); di
 .card dd { margin: 0; min-width: 0; }
 .card ol { margin: 6px 0 0; padding-left: 20px; }
 .card ol li { margin-bottom: 6px; }
-.sev { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 600; padding: 1px 6px; border-radius: 3px; white-space: nowrap; }
-.sev.bug { color: var(--bug); background: color-mix(in srgb, var(--bug) 12%, transparent); }
-.sev.risk { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
-.sev.design { color: var(--accent); background: var(--accent-soft); }
-.sev.cleanup { color: var(--muted); background: var(--sunken); }
 dl.gloss { margin: 0; display: grid; gap: 12px; }
 dl.gloss dt { font-weight: 600; }
 dl.gloss dd { margin: 2px 0 0; color: var(--muted); max-width: 65ch; }
@@ -209,7 +208,7 @@ a.btn { color: var(--ink); text-decoration: none; display: inline-block; }
 
 <div class="app">
   <header class="top">
-    <div class="brand"><h1 id="title"></h1><span class="stamp" id="stamp"></span></div>
+    <div class="brand"><h1 id="title"></h1><span class="stamp" id="stamp"></span><span class="building" id="building" hidden title="This is a draft built from the code graph. Flows, key parts and the written guide are still being researched and will replace this page at the same link; reload to check.">Full wiki in progress</span></div>
     <div class="search">
       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/></svg>
       <input id="q" type="search" placeholder="Find code, a table, an endpoint or a term" autocomplete="off" aria-label="Search the wiki">
@@ -263,7 +262,7 @@ a.btn { color: var(--ink); text-decoration: none; display: inline-block; }
 const DATA = "__DATA__";
 const G = DATA.graph, W = DATA.wiki, SRC = DATA.sources;
 W.summaries = W.summaries || {}; W.flows = W.flows || []; W.keyParts = W.keyParts || []; W.recipes = W.recipes || [];
-W.stateMachines = W.stateMachines || []; W.gotchas = W.gotchas || []; W.glossary = W.glossary || []; W.components = W.components || [];
+W.stateMachines = W.stateMachines || []; W.glossary = W.glossary || []; W.components = W.components || [];
 const BLOB = G.repoUrl ? `${G.repoUrl}/blob/${G.commitFull}/` : null;
 const byId = Object.fromEntries(G.nodes.map(n => [n.id, n]));
 const LAYERS = G.layers;
@@ -341,6 +340,7 @@ const nodeBtn = id => byId[id] ? `<button class="nodelink" data-node="${esc(id)}
 
 // ---------- header ----------
 $("#title").textContent = document.title;
+$("#building").hidden = !W.draft;
 $("#stamp").innerHTML = `<b>${esc(G.commit)}</b> · ${esc(G.commitDate)}${G.dirty ? ' · <span class="dirty" title="The working tree had uncommitted changes when this was extracted">uncommitted changes</span>' : ""}${G.scope ? " · scope " + esc(G.scope) : ""} · ${G.nodes.filter(n => n.type === "unit").length} units`;
 
 // ---------- index ----------
@@ -355,7 +355,6 @@ function renderIndex() {
     ${flows ? `<h2>Follow a request</h2>${flows}` : ""}
     ${W.recipes.length ? `<h2>Make a change</h2><button data-page="recipes" class="${on("recipes")}">Change recipes<span class="count">${W.recipes.length}</span></button>` : ""}
     <h2>Reference</h2>${sms}
-    ${W.gotchas.length ? `<button data-page="gotchas" class="${on("gotchas")}">Gotchas<span class="count">${W.gotchas.length}</span></button>` : ""}
     ${W.glossary.length ? `<button data-page="glossary" class="${on("glossary")}">Glossary<span class="count">${W.glossary.length}</span></button>` : ""}`;
 }
 $("#index").addEventListener("click", e => { const b = e.target.closest("[data-page]"); if (b) openPage(b.dataset.page); });
@@ -826,17 +825,18 @@ function openPage(page, opts = {}) {
   if (page.startsWith("flow:")) { const f = currentFlow(); if (f) { drawFlow(f); return setRead(flowHtml(f)); } }
   if (page.startsWith("sm:")) { const sm = W.stateMachines.find(s => "sm:" + s.id === page); if (sm) { drawStateMachine(sm); return setRead(smHtml(sm)); } }
   if (S.view !== "map") { S.focus = null; drawMap(); } else cy.elements().removeClass("faded hot sel");
-  const pages = { overview: overviewHtml, components: componentsHtml, keyparts: keyPartsHtml, recipes: recipesHtml, gotchas: gotchasHtml, glossary: glossaryHtml };
+  const pages = { overview: overviewHtml, components: componentsHtml, keyparts: keyPartsHtml, recipes: recipesHtml, glossary: glossaryHtml };
   setRead((pages[page] || overviewHtml)());
 }
 function overviewHtml() {
   const top = G.nodes.filter(n => n.type === "unit").sort((a, b) => b.scores.core - a.scores.core).slice(0, 8);
   const langs = Object.entries(G.languages || {}).map(([k, v]) => `${k} ${v}`).join(", ");
   return `<h3>${esc(W.title)}</h3><div class="meta"><span class="tag">${esc(langs)}</span><span class="tag">${G.nodes.filter(n => n.type === "entry").length} entry points</span><span class="tag">${G.nodes.filter(n => n.type === "table").length} tables</span></div>
+  ${W.draft ? `<p class="lede"><b>Draft.</b> Built from the code graph before any research; the full wiki replaces it at this link.</p>` : ""}
   ${paras(W.overview)}
   <h4>Read these first</h4>
   <ul class="list">${(W.keyParts.length ? W.keyParts.map(k => `<li>${nodeBtn(k.node)}<span class="k">${esc(k.title)}</span></li>`) : top.map(n => `<li>${nodeBtn(n.id)}<span class="k">${esc(layerName(n.layer))}</span></li>`)).join("")}</ul>
-  ${W.flows.length ? `<h4>Suggested path</h4><p>Start with ${W.flows.slice(0, 3).map((f, i) => `<button class="nodelink" data-page="flow:${esc(f.id)}">${i + 1}. ${esc(f.title)}</button>`).join(", ")}. ${W.keyParts.length ? `Then read the <button class="nodelink" data-page="keyparts">key parts</button>` : ""}${W.gotchas.length ? ` and the <button class="nodelink" data-page="gotchas">gotchas</button> before changing anything` : ""}.</p>` : ""}
+  ${W.flows.length ? `<h4>Suggested path</h4><p>Start with ${W.flows.slice(0, 3).map((f, i) => `<button class="nodelink" data-page="flow:${esc(f.id)}">${i + 1}. ${esc(f.title)}</button>`).join(", ")}. ${W.keyParts.length ? `Then read the <button class="nodelink" data-page="keyparts">key parts</button>` : ""}.</p>` : ""}
   <h4>Using the map</h4>
   <p class="lede">${GROUPS.length > 1 ? "Architecture shows the system as a whole: entry points grouped by route, feature groups sized by how much code they hold, and the infrastructure they use, with edges labelled by what flows between them. Double-click a group to open its code. " : ""}In the Code view, node size follows the ranking you pick, the slider shows only the top N nodes, and code sits inside its feature group. Legend chips hide whole layers (config and utilities start hidden). Double-click a node to see only its neighbourhood.</p>
   <p class="lede">Built from ${G.stats.parsed} files at ${esc(G.commit)} on ${esc(G.generatedAt)}. ${G.stats.skippedFromEmbed ? `${G.stats.embeddedFiles} files are embedded for reading and asking; ${G.stats.skippedFromEmbed} less important ones are left out to keep the page small${G.repoUrl ? " and link to the repository instead" : ""}.` : "Every parsed file is embedded."}${G.stats.redactedValues ? ` ${G.stats.redactedValues} secret-looking values were redacted.` : ""}</p>`;
@@ -885,10 +885,6 @@ function clickStep(i) {
 function smHtml(sm) {
   return `<h3>${esc(sm.title)}</h3>${sm.summary ? paras(sm.summary) : ""}
   <ul class="list">${sm.transitions.map(t => `<li style="display:block"><code>${esc(t.from)}</code> → <code>${esc(t.to)}</code><br><span class="lede">${esc(t.by)}</span> ${refBtn(t.ref)}</li>`).join("")}</ul>`;
-}
-function gotchasHtml() {
-  return `<h3>Gotchas</h3><p class="lede">Read from the code at ${esc(G.commit)}. Each one links to the line it comes from.</p>` +
-    W.gotchas.map(g => `<div class="card"><div class="head"><span class="sev ${esc(g.severity)}">${esc(g.severity)}</span><b>${esc(g.title)}</b></div>${paras(g.body)}${refBtn(g.ref)}</div>`).join("");
 }
 function glossaryHtml() {
   return `<h3>Glossary</h3><p class="lede">Domain terms and the names the code uses for them.</p><dl class="gloss">` + W.glossary.map(g => `<div><dt>${esc(g.term)}</dt><dd>${inline(g.def)}</dd></div>`).join("") + "</dl>";
@@ -1041,9 +1037,6 @@ ${G.nodes.filter(n => infraKind(n)).map(n => `- ${n.id} (${KIND_NAMES[infraKind(
 KEY PARTS
 ${W.keyParts.map(k => `- ${k.title} (${k.ref}): ${k.why}`).join("\n")}
 
-GOTCHAS
-${W.gotchas.map(g => `- ${g.title} (${g.ref}): ${g.body}`).join("\n")}
-
 NODES (id | layer | path:line | summary), most important first
 ${nodeIndexText()}`;
 const TOOLS = [
@@ -1129,7 +1122,7 @@ $("#askInput").addEventListener("keydown", e => { if (e.key === "Enter" && !e.sh
 function boot() {
   initToolbar(); syncSeg(); renderLegend(); renderIndex(); renderStarters(); initCy();
   const h = (location.hash || "").slice(1);
-  const page = h.startsWith("flow-") ? "flow:" + h.slice(5) : h.startsWith("sm-") ? "sm:" + h.slice(3) : ["overview", "components", "keyparts", "recipes", "gotchas", "glossary"].includes(h) ? h : "overview";
+  const page = h.startsWith("flow-") ? "flow:" + h.slice(5) : h.startsWith("sm-") ? "sm:" + h.slice(3) : ["overview", "components", "keyparts", "recipes", "glossary"].includes(h) ? h : "overview";
   drawMap(); openPage(page, { noHash: true });
   const restyle = () => { cy.style(styleSheet()); renderLegend(); if (S.view === "map") drawMap(); else if (S.view === "flow") drawFlow(currentFlow()); else openPage(S.page, { noHash: true }); };
   try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", restyle); } catch {}

@@ -1,6 +1,10 @@
 """Merge the lead's wiki.base.json and the research fragments in wiki.d/ into wiki.json.
 
-Usage: python merge.py <workspace>
+Usage: python merge.py <workspace> [--allow-unchecked]
+
+Every source must first have a stamped check record (checks.py): a claim without a current verdict stops the
+merge. --allow-unchecked merges anyway and lists what was not checked; use it only where no checker could
+run, and say so in the report to the user.
 
 Order: wiki.base.json first, then wiki.d/*.json by file name. When two sources describe the same thing,
 the first one wins and the merge report says what was dropped. Identical duplicates are dropped silently.
@@ -9,6 +13,7 @@ the ids must be renamed (fragment ids should start with their area slug).
 """
 import json
 import os
+import subprocess
 import sys
 
 LIST_BY_ID = ("flows", "recipes", "stateMachines")  # same id with different content = conflict
@@ -22,10 +27,22 @@ def load(path):
     return data
 
 
+def unchecked(ws, slugs):
+    """Run checks.py --status for each source; return its report for each one that is not fully checked."""
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "checks.py")
+    out = []
+    for slug in slugs:
+        r = subprocess.run([sys.executable, "-I", script, ws, slug, "--status"], capture_output=True, text=True)
+        if r.returncode != 0:
+            out.append((r.stdout or r.stderr).strip())
+    return out
+
+
 def main():
-    if len(sys.argv) != 2:
+    args = [a for a in sys.argv[1:] if a != "--allow-unchecked"]
+    if len(args) != 1 or len(sys.argv) > 3:
         sys.exit(__doc__)
-    ws = sys.argv[1]
+    ws = args[0]
     base_path = os.path.join(ws, "wiki.base.json")
     frag_dir = os.path.join(ws, "wiki.d")
     sources = []
@@ -36,6 +53,12 @@ def main():
             sources.append((f"wiki.d/{name}", load(os.path.join(frag_dir, name))))
     if not sources:
         sys.exit(f"Nothing to merge: no {base_path} and no fragments in {frag_dir}.")
+    gaps = unchecked(ws, ["base" if src == "wiki.base.json" else src[len("wiki.d/"):-len(".json")] for src, _ in sources])
+    if gaps:
+        print("\n".join(gaps))
+        if "--allow-unchecked" not in sys.argv:
+            sys.exit("\nNot written: have these checked (checks.py), or pass --allow-unchecked where no checker can run.")
+        print("merging anyway (--allow-unchecked): report the unchecked claims to the user\n")
 
     out = {}
     notes, conflicts = [], []
@@ -68,8 +91,6 @@ def main():
             add("groups", item.get("id"), item, src, f"group {item.get('id')!r}")
         for item in data.get("keyParts", []) or []:
             add("keyParts", item.get("node"), item, src, f"the key part for {item.get('node')!r}")
-        for item in data.get("gotchas", []) or []:
-            add("gotchas", item.get("ref"), item, src, f"the gotcha at {item.get('ref')!r}")
         for item in data.get("glossary", []) or []:
             add("glossary", (item.get("term") or "").strip().lower(), item, src, f"the term {item.get('term')!r}")
         for nid, text in (data.get("summaries") or {}).items():

@@ -158,7 +158,7 @@ Subagents: when Claude Code runs subagents, the mod also draws their rows in the
 
 ```
 ├─ DEV-67                      running  6m42s  · ✓ checks · 0/5 resolved · Bash: npm test 34s · 48k tokens
-└─ Generating wiki for Arcana  running  4m40s  · Agent: Research frontend · 61k tokens
+└─ Generating wiki for my-app  running  4m40s  · Agent: Research frontend · 61k tokens
    ├─ Research core            running  3m50s  · Read extract.py · 52k tokens
    ├─ Research API             idle     3m50s  · nothing for 2m05s · 40k tokens
    └─ Research evals           ✓ done   in 2m50s · 35k tokens
